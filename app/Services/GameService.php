@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Campaign;
 use App\Models\Character;
 use App\Models\Inventory;
 use App\Models\Item;
@@ -167,9 +168,9 @@ class GameService
     }
 
     /**
-     * Equip starter items for newly created character.
+     * Equip starter items for character and optionally for a specific campaign.
      */
-    public function grantStarterItems(Character $character): void
+    public function grantStarterItems(Character $character, ?Campaign $campaign = null): void
     {
         $classData = self::CLASSES[$character->class] ?? self::CLASSES['Warrior'];
 
@@ -189,8 +190,10 @@ class GameService
                 ]
             );
 
+            // Create inventory scoped to campaign or base character
             Inventory::firstOrCreate(
                 [
+                    'campaign_id' => $campaign?->id,
                     'character_id' => $character->id,
                     'item_id' => $item->id,
                 ],
@@ -203,43 +206,49 @@ class GameService
     }
 
     /**
-     * Apply validated gameplay updates to character and inventory.
+     * Apply validated gameplay updates to campaign-isolated character status and inventory.
      * Guaranteed to run inside a database transaction.
      *
+     * @param Campaign $campaign
      * @param array $aiOutcome Validated outcome from Gemini or Game Engine
      * @return array Summary of applied game state modifications
      */
-    public function applyActionOutcome(Character $character, array $aiOutcome): array
+    public function applyActionOutcome(Campaign $campaign, array $aiOutcome): array
     {
-        return DB::transaction(function () use ($character, $aiOutcome) {
+        return DB::transaction(function () use ($campaign, $aiOutcome) {
+            $character = $campaign->character;
             $hpChange = (int) ($aiOutcome['hp_change'] ?? 0);
             $xpChange = (int) ($aiOutcome['xp_change'] ?? 0);
 
-            // Cap and validate HP change
-            $oldHp = $character->current_hp;
-            $newHp = max(0, min($character->max_hp, $oldHp + $hpChange));
+            // Use campaign-isolated HP values
+            $currentMaxHp = $campaign->max_hp ?: $character->max_hp;
+            $oldHp = $campaign->current_hp ?? $currentMaxHp;
+
+            $newHp = max(0, min($currentMaxHp, $oldHp + $hpChange));
             $actualHpDelta = $newHp - $oldHp;
 
-            $character->current_hp = $newHp;
+            $campaign->current_hp = $newHp;
+            $campaign->max_hp = $currentMaxHp;
 
-            // Character status update
+            // Character status update in this campaign
             if ($newHp <= 0) {
-                $character->status = 'Unconscious';
-            } elseif ($character->status === 'Unconscious' && $newHp > 0) {
-                $character->status = 'Alive';
+                $campaign->character_status = 'Unconscious';
+            } elseif ($campaign->character_status === 'Unconscious' && $newHp > 0) {
+                $campaign->character_status = 'Alive';
             }
 
             // Cap and validate XP change
             $xpGain = max(0, $xpChange);
-            $character->experience += $xpGain;
+            $campaign->experience = ($campaign->experience ?? 0) + $xpGain;
 
-            // Check level up
+            // Check level up inside this campaign
             $didLevelUp = false;
-            $levelsGained = 0;
-            while ($character->experience >= $character->xpThresholdForNextLevel() && $character->level < 20) {
-                $character->level += 1;
+            $currentLevel = $campaign->level ?: 1;
+
+            while ($campaign->experience >= $campaign->xpThresholdForNextLevel() && $currentLevel < 20) {
+                $currentLevel += 1;
+                $campaign->level = $currentLevel;
                 $didLevelUp = true;
-                $levelsGained += 1;
 
                 // HP bonus per level (hit die average + CON mod)
                 $classData = self::CLASSES[$character->class] ?? self::CLASSES['Warrior'];
@@ -247,25 +256,13 @@ class GameService
                 $conMod = $character->getModifier('constitution');
                 $hpIncrease = max(1, (int) round($hitDie / 2) + 1 + $conMod);
 
-                $character->max_hp += $hpIncrease;
-                $character->current_hp = $character->max_hp; // fully restore on level up
-
-                // Stat improvements every level
-                $primaryStat = match ($character->class) {
-                    'Warrior' => 'strength',
-                    'Mage' => 'intelligence',
-                    'Archer', 'Rogue' => 'dexterity',
-                    'Cleric' => 'wisdom',
-                    default => 'constitution',
-                };
-                if ($character->{$primaryStat} < 20) {
-                    $character->{$primaryStat} += 1;
-                }
+                $campaign->max_hp += $hpIncrease;
+                $campaign->current_hp = $campaign->max_hp; // fully restore on level up
             }
 
-            $character->save();
+            $campaign->save();
 
-            // Process inventory modifications
+            // Process campaign-isolated inventory modifications
             $processedItems = [];
             if (!empty($aiOutcome['inventory_changes']) && is_array($aiOutcome['inventory_changes'])) {
                 foreach ($aiOutcome['inventory_changes'] as $change) {
@@ -297,6 +294,7 @@ class GameService
                         );
 
                         $inv = Inventory::firstOrNew([
+                            'campaign_id' => $campaign->id,
                             'character_id' => $character->id,
                             'item_id' => $item->id,
                         ]);
@@ -314,7 +312,8 @@ class GameService
                         $item = Item::where('name', 'like', "%{$itemName}%")->first();
 
                         if ($item) {
-                            $inv = Inventory::where('character_id', $character->id)
+                            $inv = Inventory::where('campaign_id', $campaign->id)
+                                ->where('character_id', $character->id)
                                 ->where('item_id', $item->id)
                                 ->first();
 
@@ -339,51 +338,63 @@ class GameService
 
             return [
                 'old_hp' => $oldHp,
-                'new_hp' => $newHp,
+                'new_hp' => $campaign->current_hp,
                 'hp_delta' => $actualHpDelta,
-                'old_xp' => $character->experience - $xpGain,
-                'new_xp' => $character->experience,
+                'old_xp' => $campaign->experience - $xpGain,
+                'new_xp' => $campaign->experience,
                 'xp_gain' => $xpGain,
                 'did_level_up' => $didLevelUp,
-                'new_level' => $character->level,
-                'status' => $character->status,
+                'new_level' => $campaign->level,
+                'status' => $campaign->character_status,
                 'inventory_changes' => $processedItems,
             ];
         });
     }
 
     /**
-     * Use a consumable item (e.g., Potion of Healing).
+     * Use a consumable item in a campaign (e.g., Potion of Healing).
      */
-    public function useItem(Character $character, int $itemId): array
+    public function useItem(Campaign $campaign, int $itemId): array
     {
-        return DB::transaction(function () use ($character, $itemId) {
+        return DB::transaction(function () use ($campaign, $itemId) {
             $inventory = Inventory::with('item')
-                ->where('character_id', $character->id)
+                ->where('campaign_id', $campaign->id)
                 ->where('item_id', $itemId)
                 ->first();
+
+            // Fallback to base character inventory if campaign-specific doesn't exist
+            if (!$inventory) {
+                $inventory = Inventory::with('item')
+                    ->whereNull('campaign_id')
+                    ->where('character_id', $campaign->character_id)
+                    ->where('item_id', $itemId)
+                    ->first();
+            }
 
             if (!$inventory || $inventory->quantity < 1) {
                 return [
                     'success' => false,
-                    'message' => 'Item tidak ditemukan di inventaris karakter Anda.',
+                    'message' => 'Item tidak ditemukan di inventaris campaign ini.',
                 ];
             }
 
             $item = $inventory->item;
+            $maxHp = $campaign->max_hp ?: $campaign->character->max_hp;
+            $currentHp = $campaign->current_hp ?? $maxHp;
 
             // Handle healing item
             if ($item->category === 'potion' || $item->effect_type === 'heal') {
                 $healAmount = $item->effect_value ?: 15;
-                $oldHp = $character->current_hp;
-                $character->current_hp = min($character->max_hp, $character->current_hp + $healAmount);
-                $restored = $character->current_hp - $oldHp;
+                $newHp = min($maxHp, $currentHp + $healAmount);
+                $restored = $newHp - $currentHp;
 
-                if ($character->status === 'Unconscious' && $character->current_hp > 0) {
-                    $character->status = 'Alive';
+                $campaign->current_hp = $newHp;
+
+                if ($campaign->character_status === 'Unconscious' && $campaign->current_hp > 0) {
+                    $campaign->character_status = 'Alive';
                 }
 
-                $character->save();
+                $campaign->save();
 
                 // Decrement inventory
                 if ($inventory->quantity > 1) {
@@ -396,7 +407,7 @@ class GameService
                 return [
                     'success' => true,
                     'message' => "Kamu meminum {$item->name} dan memulihkan {$restored} HP!",
-                    'character' => $character->fresh(),
+                    'campaign' => $campaign->fresh(),
                     'item' => $item,
                     'hp_restored' => $restored,
                 ];
@@ -412,7 +423,7 @@ class GameService
                 return [
                     'success' => true,
                     'message' => "Kamu telah {$statusMsg} {$item->name}.",
-                    'character' => $character->fresh(),
+                    'campaign' => $campaign->fresh(),
                     'item' => $item,
                     'is_equipped' => $inventory->is_equipped,
                 ];

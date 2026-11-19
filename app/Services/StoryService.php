@@ -54,21 +54,23 @@ class StoryService
     }
 
     /**
-     * Construct rich context array for the Gemini Prompt.
+     * Construct rich context array for the Gemini Prompt using campaign-isolated character state.
      */
-    public function buildPromptContext(Campaign $campaign, Character $character, string $playerAction): array
+    public function buildPromptContext(Campaign $campaign, string $playerAction): array
     {
+        $character = $campaign->character;
         $recentHistories = $this->getRecentHistory($campaign, 8);
 
-        // Format inventory items
-        $inventoryList = $character->inventories()
-            ->with('item')
-            ->get()
-            ->map(function ($inv) {
-                $status = $inv->is_equipped ? ' (Digunakan)' : '';
-                return "{$inv->item->name} [{$inv->item->category}, x{$inv->quantity}]{$status}: {$inv->item->description}";
-            })
-            ->toArray();
+        // Fetch campaign-scoped inventories (or fallback to base character)
+        $inventories = $campaign->inventories()->with('item')->get();
+        if ($inventories->isEmpty()) {
+            $inventories = $character->inventories()->whereNull('campaign_id')->with('item')->get();
+        }
+
+        $inventoryList = $inventories->map(function ($inv) {
+            $status = $inv->is_equipped ? ' (Digunakan)' : '';
+            return "{$inv->item->name} [{$inv->item->category}, x{$inv->quantity}]{$status}: {$inv->item->description}";
+        })->toArray();
 
         // Format recent dialogue history
         $formattedHistory = [];
@@ -86,6 +88,12 @@ class StoryService
             ];
         }
 
+        $currHp = $campaign->current_hp ?? $character->max_hp;
+        $maxHp = $campaign->max_hp ?? $character->max_hp;
+        $level = $campaign->level ?? $character->level;
+        $exp = $campaign->experience ?? $character->experience;
+        $status = $campaign->character_status ?? $character->status;
+
         return [
             'campaign' => [
                 'title' => $campaign->title,
@@ -98,11 +106,11 @@ class StoryService
                 'name' => $character->name,
                 'race' => $character->race,
                 'class' => $character->class,
-                'level' => $character->level,
-                'experience' => $character->experience,
-                'current_hp' => $character->current_hp,
-                'max_hp' => $character->max_hp,
-                'status' => $character->status,
+                'level' => $level,
+                'experience' => $exp,
+                'current_hp' => $currHp,
+                'max_hp' => $maxHp,
+                'status' => $status,
                 'stats' => [
                     'strength' => $character->strength . " (" . $character->getModifierString('strength') . ")",
                     'dexterity' => $character->dexterity . " (" . $character->getModifierString('dexterity') . ")",
@@ -145,7 +153,7 @@ class StoryService
             'action_result' => 'info',
             'reasoning' => 'Awal petualangan: Dungeon Master membacakan prolog suasana awal dan menetapkan medan.',
             'hp_change' => 0,
-            'xp_change' => 10, // Small starting XP for starting
+            'xp_change' => 10,
             'inventory_changes' => [],
             'enemy_or_npc' => null,
             'campaign_status' => 'Active',
