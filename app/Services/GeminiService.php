@@ -38,7 +38,7 @@ class GeminiService
         $systemInstruction = $this->buildSystemInstruction();
         $userPrompt = $this->formatUserPrompt($context);
 
-        $endpoint = "{$this->baseUrl}/models/{$this->model}:generateContent?key={$this->apiKey}";
+        $endpoint = "{$this->baseUrl}/models/{$this->model}:generateContent";
 
         $payload = [
             'contents' => [
@@ -58,6 +58,10 @@ class GeminiService
 
         try {
             $response = Http::timeout($this->timeout)
+                ->withHeaders([
+                    'Content-Type' => 'application/json',
+                    'x-goog-api-key' => $this->apiKey,
+                ])
                 ->retry(2, 500)
                 ->post($endpoint, $payload);
 
