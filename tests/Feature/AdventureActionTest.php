@@ -42,6 +42,11 @@ class AdventureActionTest extends TestCase
             'difficulty' => 'Medium',
             'status' => 'Active',
             'current_location' => 'Gerbang Kastil',
+            'current_hp' => 16,
+            'max_hp' => 16,
+            'level' => 1,
+            'experience' => 0,
+            'character_status' => 'Alive',
         ]);
 
         $response = $this->actingAs($user)->postJson(route('campaigns.action', $campaign), [
@@ -86,7 +91,7 @@ class AdventureActionTest extends TestCase
             'level' => 1,
             'experience' => 0,
             'max_hp' => 20,
-            'current_hp' => 5, // Damaged!
+            'current_hp' => 20,
             'strength' => 10,
             'dexterity' => 10,
             'constitution' => 10,
@@ -102,6 +107,11 @@ class AdventureActionTest extends TestCase
             'title' => 'Penyembuhan di Perkemahan',
             'difficulty' => 'Medium',
             'status' => 'Active',
+            'current_hp' => 5,  // Damaged in this campaign
+            'max_hp' => 20,
+            'level' => 1,
+            'experience' => 0,
+            'character_status' => 'Alive',
         ]);
 
         $potion = Item::create([
@@ -113,8 +123,10 @@ class AdventureActionTest extends TestCase
             'effect_value' => 15,
         ]);
 
+        // Inventory scoped by campaign_id (new architecture)
         Inventory::create([
             'character_id' => $character->id,
+            'campaign_id' => $campaign->id,
             'item_id' => $potion->id,
             'quantity' => 2,
         ]);
@@ -128,12 +140,15 @@ class AdventureActionTest extends TestCase
             'success' => true,
         ]);
 
-        // Assert character HP increased from 5 to 20 (capped at max_hp)
-        $character->refresh();
-        $this->assertEquals(20, $character->current_hp);
+        // Assert campaign HP increased from 5 to 20 (capped at max_hp)
+        $campaign->refresh();
+        $this->assertEquals(20, $campaign->current_hp);
 
-        // Assert inventory decremented from 2 to 1
-        $inv = Inventory::where('character_id', $character->id)->where('item_id', $potion->id)->first();
+        // Assert campaign-scoped inventory decremented from 2 to 1
+        $inv = Inventory::where('campaign_id', $campaign->id)
+            ->where('character_id', $character->id)
+            ->where('item_id', $potion->id)
+            ->first();
         $this->assertEquals(1, $inv->quantity);
 
         // Assert system story history was recorded
@@ -161,6 +176,11 @@ class AdventureActionTest extends TestCase
             'character_id' => $character->id,
             'title' => 'Jurang Kematian',
             'status' => 'Active',
+            'current_hp' => 0,
+            'max_hp' => 15,
+            'level' => 1,
+            'experience' => 0,
+            'character_status' => 'Unconscious', // Campaign-level unconscious state
         ]);
 
         $response = $this->actingAs($user)->postJson(route('campaigns.action', $campaign), [
