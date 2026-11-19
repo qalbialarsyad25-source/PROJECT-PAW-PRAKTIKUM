@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreCampaignRequest;
 use App\Models\Campaign;
+use App\Models\Character;
+use App\Services\GameService;
 use App\Services\StoryService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Auth;
@@ -12,7 +14,8 @@ use Illuminate\View\View;
 class CampaignController extends Controller
 {
     public function __construct(
-        protected StoryService $storyService
+        protected StoryService $storyService,
+        protected GameService $gameService
     ) {}
 
     /**
@@ -48,10 +51,12 @@ class CampaignController extends Controller
     }
 
     /**
-     * Store a newly created campaign and initialize its prologue.
+     * Store a newly created campaign and initialize its prologue and campaign-isolated status.
      */
     public function store(StoreCampaignRequest $request): RedirectResponse
     {
+        $character = Character::findOrFail($request->character_id);
+
         $campaign = Auth::user()->campaigns()->create([
             'character_id' => $request->character_id,
             'title' => $request->title,
@@ -59,9 +64,15 @@ class CampaignController extends Controller
             'difficulty' => $request->difficulty,
             'status' => 'Active',
             'current_location' => 'Pintu Gerbang Petualangan',
+            'current_hp' => $character->max_hp,
+            'max_hp' => $character->max_hp,
+            'level' => 1,
+            'experience' => 0,
+            'character_status' => 'Alive',
         ]);
 
-        $character = $campaign->character;
+        // Grant campaign-isolated starter equipment
+        $this->gameService->grantStarterItems($character, $campaign);
 
         // Generate opening prologue
         $prologue = $this->storyService->generateOpeningPrologue($campaign, $character);
@@ -80,9 +91,9 @@ class CampaignController extends Controller
             xpChange: $prologue['xp_change']
         );
 
-        // Give initial experience bonus
-        $character->experience += $prologue['xp_change'];
-        $character->save();
+        // Initial experience bonus for starting campaign
+        $campaign->experience += $prologue['xp_change'];
+        $campaign->save();
 
         return redirect()->route('campaigns.adventure', $campaign)
             ->with('success', "Campaign '{$campaign->title}' dimulai! Sang Dungeon Master menantimu.");
@@ -108,17 +119,26 @@ class CampaignController extends Controller
         $this->authorizeCampaign($campaign);
 
         $campaign->load([
-            'character.inventories.item',
+            'character',
+            'inventories.item',
             'storyHistories' => function ($q) {
                 $q->orderBy('created_at', 'asc');
             },
         ]);
 
+        $inventories = $campaign->inventories;
+        if ($inventories->isEmpty()) {
+            // Seed starter items into this campaign if none exists
+            $this->gameService->grantStarterItems($campaign->character, $campaign);
+            $campaign->refresh();
+            $inventories = $campaign->inventories()->with('item')->get();
+        }
+
         return view('campaigns.adventure', [
             'campaign' => $campaign,
             'character' => $campaign->character,
             'histories' => $campaign->storyHistories,
-            'inventories' => $campaign->character->inventories,
+            'inventories' => $inventories,
         ]);
     }
 
