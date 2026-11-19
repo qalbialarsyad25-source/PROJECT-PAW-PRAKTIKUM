@@ -106,7 +106,14 @@ class DatabaseSeeder extends Seeder
                 'difficulty' => 'Medium',
                 'status' => 'Active',
                 'current_location' => 'Reruntuhan Kuno Benteng Ravenloft',
+                'current_hp' => $warrior->max_hp,
+                'max_hp' => $warrior->max_hp,
+                'level' => 1,
+                'experience' => 50,
+                'character_status' => 'Alive',
             ]);
+
+            $gameService->grantStarterItems($warrior, $campaign);
 
             // Create prologue for this campaign
             $prologue = $storyService->generateOpeningPrologue($campaign, $warrior);
