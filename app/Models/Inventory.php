@@ -11,6 +11,7 @@ class Inventory extends Model
     use HasFactory;
 
     protected $fillable = [
+        'campaign_id',
         'character_id',
         'item_id',
         'quantity',
@@ -23,6 +24,11 @@ class Inventory extends Model
             'quantity' => 'integer',
             'is_equipped' => 'boolean',
         ];
+    }
+
+    public function campaign(): BelongsTo
+    {
+        return $this->belongsTo(Campaign::class);
     }
 
     public function character(): BelongsTo
