@@ -203,8 +203,12 @@
         'Cleric' => 'fa-cross',
     ];
     $icon = $classIcons[$character->class] ?? 'fa-user';
-    $hpPercent = $character->hpPercentage();
+    $hpPercent = $campaign->hpPercentage();
     $hpColor = $hpPercent > 50 ? '#10b981' : ($hpPercent > 20 ? '#f59e0b' : '#ef4444');
+    $currentHp = $campaign->current_hp ?? $campaign->max_hp ?? $character->max_hp;
+    $maxHp = $campaign->max_hp ?? $character->max_hp;
+    $level = $campaign->level ?? 1;
+    $status = $campaign->character_status ?? 'Alive';
 @endphp
 
 <div class="adventure-grid">
@@ -225,7 +229,7 @@
                     </div>
                 </div>
                 <span id="charLevelBadge" style="background: rgba(212, 175, 55, 0.2); border: 1px solid var(--gold-primary); color: var(--gold-bright); font-size: 0.75rem; font-weight: 800; padding: 2px 8px; border-radius: 12px;">
-                    Lv. {{ $character->level }}
+                    Lv. {{ $level }}
                 </span>
             </div>
 
@@ -234,7 +238,7 @@
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
                     <span style="color: #cbd5e1; font-weight: 600;"><i class="fa-solid fa-heart" style="color: #ef4444; margin-right: 4px;"></i> Hit Points (HP)</span>
                     <span id="charHpText" style="font-weight: 800; color: {{ $hpColor }};">
-                        {{ $character->current_hp }} / {{ $character->max_hp }}
+                        {{ $currentHp }} / {{ $maxHp }}
                     </span>
                 </div>
                 <div style="height: 10px; background: #0b0d14; border-radius: 5px; overflow: hidden; border: 1px solid #242938;">
@@ -247,11 +251,11 @@
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
                     <span style="color: #cbd5e1; font-weight: 600;"><i class="fa-solid fa-star" style="color: #f59e0b; margin-right: 4px;"></i> Pengalaman (XP)</span>
                     <span id="charXpText" style="color: #60a5fa; font-weight: 700;">
-                        {{ $character->experience }} / {{ $character->xpThresholdForNextLevel() }}
+                        {{ $campaign->experience }} / {{ $campaign->xpThresholdForNextLevel() }}
                     </span>
                 </div>
                 <div style="height: 8px; background: #0b0d14; border-radius: 4px; overflow: hidden; border: 1px solid #242938;">
-                    <div id="charXpBar" style="height: 100%; width: {{ $character->xpPercentage() }}%; background: #3b82f6; transition: width 0.3s ease;"></div>
+                    <div id="charXpBar" style="height: 100%; width: {{ $campaign->xpPercentage() }}%; background: #3b82f6; transition: width 0.3s ease;"></div>
                 </div>
             </div>
 
@@ -292,8 +296,8 @@
             <!-- Status Indicator -->
             <div style="display: flex; justify-content: space-between; align-items: center; background: #0a0c12; padding: 8px 12px; border-radius: 6px; border: 1px solid #1c212e; font-size: 0.78rem;">
                 <span style="color: #94a3b8;">Kondisi Fisik:</span>
-                <span id="charStatusText" style="font-weight: 800; color: {{ $character->status === 'Alive' ? '#10b981' : '#ef4444' }};">
-                    {{ $character->status === 'Alive' ? 'Sehat Bersemangat' : 'Pingsan / Kritis' }}
+                <span id="charStatusText" style="font-weight: 800; color: {{ $status === 'Alive' ? '#10b981' : '#ef4444' }};">
+                    {{ $status === 'Alive' ? 'Sehat Bersemangat' : 'Pingsan / Kritis' }}
                 </span>
             </div>
         </div>
