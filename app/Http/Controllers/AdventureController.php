@@ -9,7 +9,6 @@ use App\Services\GeminiService;
 use App\Services\StoryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 
 class AdventureController extends Controller
 {
@@ -34,22 +33,23 @@ class AdventureController extends Controller
         }
 
         $character = $campaign->character;
+        $campaignStatus = $campaign->character_status ?? 'Alive';
 
-        if ($character->status === 'Unconscious' && !str_contains(strtolower($request->action), 'istirahat') && !str_contains(strtolower($request->action), 'ramuan')) {
+        if ($campaignStatus === 'Unconscious' && !str_contains(strtolower($request->action), 'istirahat') && !str_contains(strtolower($request->action), 'ramuan')) {
             return response()->json([
                 'success' => false,
-                'message' => 'Karakter Anda sedang pingsan / terluka parah (0 HP). Anda harus meminum ramuan penyembuh atau beristirahat untuk memulihkan vitalitas!',
+                'message' => 'Karakter Anda sedang pingsan / terluka parah (0 HP) dalam campaign ini. Anda harus meminum ramuan penyembuh atau beristirahat untuk memulihkan vitalitas!',
             ], 422);
         }
 
         // 1. Build rich context for Gemini API
-        $context = $this->storyService->buildPromptContext($campaign, $character, $request->action);
+        $context = $this->storyService->buildPromptContext($campaign, $request->action);
 
         // 2. Call Gemini API (with internal procedural D&D fallback)
         $aiOutcome = $this->geminiService->generateTurnOutcome($context);
 
-        // 3. Backend single-source-of-truth: Apply validated status updates in DB transaction
-        $gameplayUpdates = $this->gameService->applyActionOutcome($character, $aiOutcome);
+        // 3. Backend single-source-of-truth: Apply validated status updates to Campaign in DB transaction
+        $gameplayUpdates = $this->gameService->applyActionOutcome($campaign, $aiOutcome);
 
         // 4. Update campaign status if AI determined quest completion
         if (($aiOutcome['campaign_status'] ?? 'Active') === 'Completed') {
@@ -71,8 +71,8 @@ class AdventureController extends Controller
             xpChange: $gameplayUpdates['xp_gain']
         );
 
-        // 6. Reload updated inventories for frontend UI update
-        $updatedInventories = $character->inventories()
+        // 6. Reload updated campaign-scoped inventories for frontend UI update
+        $updatedInventories = $campaign->inventories()
             ->with('item')
             ->get()
             ->map(function ($inv) {
@@ -109,14 +109,14 @@ class AdventureController extends Controller
                 'name' => $character->name,
                 'class' => $character->class,
                 'race' => $character->race,
-                'current_hp' => $character->current_hp,
-                'max_hp' => $character->max_hp,
-                'hp_percent' => $character->hpPercentage(),
-                'level' => $character->level,
-                'experience' => $character->experience,
-                'xp_target' => $character->xpThresholdForNextLevel(),
-                'xp_percent' => $character->xpPercentage(),
-                'status' => $character->status,
+                'current_hp' => $campaign->current_hp,
+                'max_hp' => $campaign->max_hp,
+                'hp_percent' => $campaign->hpPercentage(),
+                'level' => $campaign->level,
+                'experience' => $campaign->experience,
+                'xp_target' => $campaign->xpThresholdForNextLevel(),
+                'xp_percent' => $campaign->xpPercentage(),
+                'status' => $campaign->character_status,
                 'stats' => [
                     'strength' => $character->strength,
                     'dexterity' => $character->dexterity,
@@ -140,7 +140,7 @@ class AdventureController extends Controller
     }
 
     /**
-     * Use or equip an item from the character's inventory.
+     * Use or equip an item from the campaign's inventory.
      */
     public function useItem(Request $request, Campaign $campaign): JsonResponse
     {
@@ -150,8 +150,7 @@ class AdventureController extends Controller
             'item_id' => ['required', 'integer'],
         ]);
 
-        $character = $campaign->character;
-        $result = $this->gameService->useItem($character, (int) $request->item_id);
+        $result = $this->gameService->useItem($campaign, (int) $request->item_id);
 
         if (!$result['success']) {
             return response()->json($result, 422);
@@ -160,7 +159,7 @@ class AdventureController extends Controller
         // Record system action in story histories
         $this->storyService->recordStoryEvent(
             campaign: $campaign,
-            character: $character,
+            character: $campaign->character,
             senderType: 'system',
             playerAction: null,
             narrative: "[Sistem Inventaris] " . $result['message'],
@@ -171,9 +170,9 @@ class AdventureController extends Controller
             xpChange: 0
         );
 
-        $character = $character->fresh();
+        $campaign = $campaign->fresh();
 
-        $updatedInventories = $character->inventories()
+        $updatedInventories = $campaign->inventories()
             ->with('item')
             ->get()
             ->map(function ($inv) {
@@ -196,10 +195,10 @@ class AdventureController extends Controller
             'success' => true,
             'message' => $result['message'],
             'character' => [
-                'current_hp' => $character->current_hp,
-                'max_hp' => $character->max_hp,
-                'hp_percent' => $character->hpPercentage(),
-                'status' => $character->status,
+                'current_hp' => $campaign->current_hp,
+                'max_hp' => $campaign->max_hp,
+                'hp_percent' => $campaign->hpPercentage(),
+                'status' => $campaign->character_status,
             ],
             'inventories' => $updatedInventories,
         ]);
@@ -210,7 +209,7 @@ class AdventureController extends Controller
      */
     protected function authorizeCampaign(Campaign $campaign): void
     {
-        if ($campaign->user_id !== Auth::id()) {
+        if ($campaign->user_id !== auth()->id()) {
             abort(403, 'Akses ditolak: Anda tidak memiliki wewenang atas campaign ini.');
         }
     }
